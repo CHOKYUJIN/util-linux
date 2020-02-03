@@ -172,6 +172,10 @@ struct fdisk_gpt_label {
 	struct gpt_header	*bheader;	/* backup header */
 
 	unsigned char *ents;			/* entries (partitions) */
+
+	unsigned int no_recovery :1,		/* no recovery broken primary/backup */
+		     no_relocate :1,		/* do not fix backup location */
+		     minimize :1;
 };
 
 static void gpt_deinit(struct fdisk_label *lb);
@@ -492,7 +496,7 @@ static int gpt_mknew_pmbr(struct fdisk_context *cxt)
 static void gpt_fix_alternative_lba(struct fdisk_context *cxt, struct fdisk_gpt_label *gpt)
 {
 	struct gpt_header *p, *b;
-	uint64_t x = 0;
+	uint64_t x = 0, orig;
 	size_t nents;
 
 	if (!cxt)
@@ -502,6 +506,7 @@ static void gpt_fix_alternative_lba(struct fdisk_context *cxt, struct fdisk_gpt_
 	b = gpt->bheader;	/* backup */
 
 	nents = le32_to_cpu(p->npartition_entries);
+	orig = le64_to_cpu(p->alternative_lba);
 
 	/* reference from primary to backup */
 	p->alternative_lba = cpu_to_le64(cxt->total_sectors - 1ULL);
@@ -519,14 +524,14 @@ static void gpt_fix_alternative_lba(struct fdisk_context *cxt, struct fdisk_gpt_
 	p->last_usable_lba  = cpu_to_le64(x);
 	b->last_usable_lba  = cpu_to_le64(x);
 
-	DBG(GPT, ul_debug("Alternative-LBA updated to: %"PRIu64, le64_to_cpu(p->alternative_lba)));
+	DBG(GPT, ul_debug("Alternative-LBA updated from %"PRIu64" to %"PRIu64,
+				orig, le64_to_cpu(p->alternative_lba)));
 }
 
-/* move backup header behind the last partition */
-static void gpt_minimize_alternative_lba(struct fdisk_context *cxt, struct fdisk_gpt_label *gpt)
+static uint64_t gpt_calculate_minimal_size(struct fdisk_context *cxt, struct fdisk_gpt_label *gpt)
 {
 	size_t i;
-	uint64_t x = 0, total = 0, orig = cxt->total_sectors;
+	uint64_t x = 0, total = 0;
 	struct gpt_header *hdr;
 
 	assert(cxt);
@@ -555,11 +560,28 @@ static void gpt_minimize_alternative_lba(struct fdisk_context *cxt, struct fdisk
 	total += cxt->total_sectors - x;
 
 	DBG(GPT, ul_debug("minimal device is %"PRIu64, total));
+	return total;
+}
+
+static int gpt_possible_minimize(struct fdisk_context *cxt, struct fdisk_gpt_label *gpt)
+{
+	struct gpt_header *hdr = gpt->pheader;
+	uint64_t total = gpt_calculate_minimal_size(cxt, gpt);
+
+	return le64_to_cpu(hdr->alternative_lba) > (total - 1ULL);
+}
+
+/* move backup header behind the last partition */
+static void gpt_minimize_alternative_lba(struct fdisk_context *cxt, struct fdisk_gpt_label *gpt)
+{
+	uint64_t total = gpt_calculate_minimal_size(cxt, gpt);
+	uint64_t orig = cxt->total_sectors;
 
 	/* Let's temporary change size of the device to recalculate backup header */
 	cxt->total_sectors = total;
 	gpt_fix_alternative_lba(cxt, gpt);
 	cxt->total_sectors = orig;
+	fdisk_label_set_changed(cxt->label, 1);
 }
 
 /* some universal differences between the headers */
@@ -1571,7 +1593,8 @@ static int gpt_probe_label(struct fdisk_context *cxt)
 		if (!gpt->bheader)
 			goto failed;
 		gpt_recompute_crc(gpt->bheader, gpt->ents);
-		fdisk_label_set_changed(cxt->label, 1);
+		if (!gpt->no_recovery)
+			fdisk_label_set_changed(cxt->label, 1);
 
 	/* primary corrupted, backup OK -- recovery */
 	} else if (!gpt->pheader && gpt->bheader) {
@@ -1581,21 +1604,31 @@ static int gpt_probe_label(struct fdisk_context *cxt)
 		if (!gpt->pheader)
 			goto failed;
 		gpt_recompute_crc(gpt->pheader, gpt->ents);
-		fdisk_label_set_changed(cxt->label, 1);
+		if (!gpt->no_recovery)
+			fdisk_label_set_changed(cxt->label, 1);
 	}
 
 	/* The headers make be correct, but Backup do not have to be on the end
 	 * of the device (due to device resize, etc.). Let's fix this issue. */
 	if (le64_to_cpu(gpt->pheader->alternative_lba) > cxt->total_sectors ||
 	    le64_to_cpu(gpt->pheader->alternative_lba) < cxt->total_sectors - 1ULL) {
-		fdisk_warnx(cxt, _("The backup GPT table is not on the end of the device. "
-				   "This problem will be corrected by write."));
 
-		gpt_fix_alternative_lba(cxt, gpt);
-		gpt_recompute_crc(gpt->bheader, gpt->ents);
-		gpt_recompute_crc(gpt->pheader, gpt->ents);
-		fdisk_label_set_changed(cxt->label, 1);
+		if (gpt->no_relocate || fdisk_is_readonly(cxt))
+			fdisk_warnx(cxt, _("The backup GPT table is not on the end of the device."));
+
+		else {
+			fdisk_warnx(cxt, _("The backup GPT table is not on the end of the device. "
+					   "This problem will be corrected by write."));
+
+			gpt_fix_alternative_lba(cxt, gpt);
+			gpt_recompute_crc(gpt->bheader, gpt->ents);
+			gpt_recompute_crc(gpt->pheader, gpt->ents);
+			fdisk_label_set_changed(cxt->label, 1);
+		}
 	}
+
+	if (gpt->minimize && gpt_possible_minimize(cxt, gpt))
+		fdisk_label_set_changed(cxt->label, 1);
 
 	cxt->label->nparts_max = gpt_get_nentries(gpt);
 	cxt->label->nparts_cur = partitions_in_use(gpt);
@@ -2051,6 +2084,9 @@ static int gpt_write_disklabel(struct fdisk_context *cxt)
 
 	if (check_overlap_partitions(gpt))
 		goto err0;
+
+	if (gpt->minimize)
+		gpt_minimize_alternative_lba(cxt, gpt);
 
 	/* recompute CRCs for both headers */
 	gpt_recompute_crc(gpt->pheader, gpt->ents);
@@ -3134,6 +3170,63 @@ struct fdisk_label *fdisk_new_gpt_label(struct fdisk_context *cxt __attribute__ 
 	lb->nfields = ARRAY_SIZE(gpt_fields);
 
 	return lb;
+}
+
+/**
+ * fdisk_gpt_disable_recovery
+ * @ld: label
+ * @disable: 0 or 1
+ *
+ * Disable automatic primary/backup header recovery. The header is recalculated
+ * during libfdisk probing stage by fdisk_assign_device() and later written
+ * by fdisk_write_disklabel(), so you need to call it before fdisk_assign_device().
+ *
+ * Since: 2.36
+ */
+void fdisk_gpt_disable_recovery(struct fdisk_label *lb, int disable)
+{
+	struct fdisk_gpt_label *gpt = (struct fdisk_gpt_label *) lb;
+
+	assert(gpt);
+	gpt->no_recovery = disable ? 1 : 0;
+}
+
+/**
+ * fdisk_gpt_disable_relocation
+ * @ld: label
+ * @disable: 0 or 1
+ *
+ * Disable automatic backup header relocation to the end of the device. The
+ * header possition is recalculated during libfdisk probing stage by
+ * fdisk_assign_device() and later written by fdisk_write_disklabel(), so you
+ * need to call it before fdisk_assign_device().
+ *
+ * Since: 2.36
+ */
+void fdisk_gpt_disable_relocation(struct fdisk_label *lb, int disable)
+{
+	struct fdisk_gpt_label *gpt = (struct fdisk_gpt_label *) lb;
+
+	assert(gpt);
+	gpt->no_relocate = disable ? 1 : 0;
+}
+
+/**
+ * fdisk_gpt_enable_minimize
+ * @ld: label
+ * @disable: 0 or 1
+ *
+ * Force libfdisk to write backup header to behind last partition. The
+ * header possition is recalculated on fdisk_write_disklabel().
+ *
+ * Since: 2.36
+ */
+void fdisk_gpt_enable_minimize(struct fdisk_label *lb, int enable)
+{
+	struct fdisk_gpt_label *gpt = (struct fdisk_gpt_label *) lb;
+
+	assert(gpt);
+	gpt->minimize = enable ? 1 : 0;
 }
 
 #ifdef TEST_PROGRAM
