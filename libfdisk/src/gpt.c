@@ -173,8 +173,7 @@ struct fdisk_gpt_label {
 
 	unsigned char *ents;			/* entries (partitions) */
 
-	unsigned int no_recovery :1,		/* no recovery broken primary/backup */
-		     no_relocate :1,		/* do not fix backup location */
+	unsigned int no_relocate :1,		/* do not fix backup location */
 		     minimize :1;
 };
 
@@ -1593,8 +1592,7 @@ static int gpt_probe_label(struct fdisk_context *cxt)
 		if (!gpt->bheader)
 			goto failed;
 		gpt_recompute_crc(gpt->bheader, gpt->ents);
-		if (!gpt->no_recovery)
-			fdisk_label_set_changed(cxt->label, 1);
+		fdisk_label_set_changed(cxt->label, 1);
 
 	/* primary corrupted, backup OK -- recovery */
 	} else if (!gpt->pheader && gpt->bheader) {
@@ -1604,8 +1602,7 @@ static int gpt_probe_label(struct fdisk_context *cxt)
 		if (!gpt->pheader)
 			goto failed;
 		gpt_recompute_crc(gpt->pheader, gpt->ents);
-		if (!gpt->no_recovery)
-			fdisk_label_set_changed(cxt->label, 1);
+		fdisk_label_set_changed(cxt->label, 1);
 	}
 
 	/* The headers make be correct, but Backup do not have to be on the end
@@ -3170,25 +3167,6 @@ struct fdisk_label *fdisk_new_gpt_label(struct fdisk_context *cxt __attribute__ 
 	lb->nfields = ARRAY_SIZE(gpt_fields);
 
 	return lb;
-}
-
-/**
- * fdisk_gpt_disable_recovery
- * @ld: label
- * @disable: 0 or 1
- *
- * Disable automatic primary/backup header recovery. The header is recalculated
- * during libfdisk probing stage by fdisk_assign_device() and later written
- * by fdisk_write_disklabel(), so you need to call it before fdisk_assign_device().
- *
- * Since: 2.36
- */
-void fdisk_gpt_disable_recovery(struct fdisk_label *lb, int disable)
-{
-	struct fdisk_gpt_label *gpt = (struct fdisk_gpt_label *) lb;
-
-	assert(gpt);
-	gpt->no_recovery = disable ? 1 : 0;
 }
 
 /**

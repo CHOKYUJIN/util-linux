@@ -171,7 +171,13 @@ Print all supported types for the current disk label or the label specified by
 .TP
 .BR \-V , " \-\-verify " [ \fIdevice ...]
 Test whether the partition table and partitions seem correct.
-
+.TP
+.BR "\-\-gpt-relocate \fImode " \fIdevice
+Relocate backup GPT header. The argument \fImode\fP can be \fBstandard\fR to
+move header to the standard location at the end of the device, or
+\fBminimize\fR to move header behind the last partition. Note that UEFI
+standard requires the backup header at the end of the device and partitioning
+tools can automatically relocate the header to follow the standard.
 .SH OPTIONS
 .TP
 .BR \-a , " \-\-append"
