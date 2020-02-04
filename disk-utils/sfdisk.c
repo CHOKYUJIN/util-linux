@@ -1370,38 +1370,35 @@ static int command_diskid(struct sfdisk *sf, int argc, char **argv)
 }
 
 /*
- * sfdisk --gpt-relocate <mode> <device>
+ * sfdisk --relocate <mode> <device>
  */
 static int command_relocate(struct sfdisk *sf, int argc, char **argv)
 {
 	const char *devname = NULL;
-	const char *mode = NULL;
+	const char *oper = NULL;
 	struct fdisk_label *lb;
 
 	if (!argc)
-		errx(EXIT_FAILURE, _("no mode specified"));
+		errx(EXIT_FAILURE, _("no relocate operation specified"));
 	if (argc < 2)
 		errx(EXIT_FAILURE, _("no disk device specified"));
 	if (argc > 2)
 		errx(EXIT_FAILURE, _("unexpected arguments"));
 
-	mode = argv[0];
+	oper = argv[0];
 	devname = argv[1];
 	lb = fdisk_get_label(sf->cxt, "gpt");
 
-	if (strcmp(mode, "minimize") == 0)
+	if (strcmp(oper, "gpt-bak-mini") == 0)
 		fdisk_gpt_enable_minimize(lb, 1);
-	else if (strcmp(mode, "standard") != 0)
-		errx(EXIT_FAILURE, _("unsupported relocation mode"));
+
+	else if (strcmp(oper, "gpt-bak-std") != 0)
+		errx(EXIT_FAILURE, _("unsupported relocation operation"));
 
 	if (fdisk_assign_device(sf->cxt, devname, 0) != 0)
 		err(EXIT_FAILURE, _("cannot open %s"), devname);
 
 	fdisk_label_set_changed(lb, 1);
-
-	/* change */
-	if (sf->backup)
-		backup_partition_table(sf, devname);
 
 	return write_changes(sf);
 }
@@ -2022,11 +2019,9 @@ static void __attribute__((__noreturn__)) usage(void)
 
 	fputs(USAGE_SEPARATOR, out);
 	fputs(_(" --disk-id <dev> [<str>]           print or change disk label ID (UUID)\n"), out);
+	fputs(_(" --relocate <oper> <dev>           move partition header\n"), out);
 
-	fputs(USAGE_SEPARATOR, out);
-	fputs(_(" --gpt-relocate <mode> <dev>       move backup header (minimize,standard)\n"), out);
-
-	fputs(USAGE_SEPARATOR, out);
+	fputs(USAGE_ARGUMENTS, out);
 	fputs(_(" <dev>                     device (usually disk) path\n"), out);
 	fputs(_(" <part>                    partition number\n"), out);
 	fputs(_(" <type>                    partition type, GUID for GPT, hex for MBR\n"), out);
@@ -2100,7 +2095,7 @@ int main(int argc, char *argv[])
 		OPT_MOVEFSYNC,
 		OPT_DELETE,
 		OPT_NOTELL,
-		OPT_GPT_RELOCATE,
+		OPT_RELOCATE,
 	};
 
 	static const struct option longopts[] = {
@@ -2135,7 +2130,7 @@ int main(int argc, char *argv[])
 		{ "wipe",    required_argument, NULL, 'w' },
 		{ "wipe-partitions",    required_argument, NULL, 'W' },
 
-		{ "gpt-relocate", no_argument,	NULL, OPT_GPT_RELOCATE },
+		{ "relocate", no_argument,	NULL, OPT_RELOCATE },
 
 		{ "part-uuid",  no_argument,    NULL, OPT_PARTUUID },
 		{ "part-label", no_argument,    NULL, OPT_PARTLABEL },
@@ -2312,7 +2307,7 @@ int main(int argc, char *argv[])
 		case OPT_NOTELL:
 			sf->notell = 1;
 			break;
-		case OPT_GPT_RELOCATE:
+		case OPT_RELOCATE:
 			sf->act = ACT_RELOCATE;
 			break;
 		default:
