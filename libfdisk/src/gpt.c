@@ -1607,8 +1607,9 @@ static int gpt_probe_label(struct fdisk_context *cxt)
 
 	/* The headers make be correct, but Backup do not have to be on the end
 	 * of the device (due to device resize, etc.). Let's fix this issue. */
-	if (le64_to_cpu(gpt->pheader->alternative_lba) > cxt->total_sectors ||
-	    le64_to_cpu(gpt->pheader->alternative_lba) < cxt->total_sectors - 1ULL) {
+	if (gpt->minimize == 0 &&
+	    (le64_to_cpu(gpt->pheader->alternative_lba) > cxt->total_sectors ||
+	     le64_to_cpu(gpt->pheader->alternative_lba) < cxt->total_sectors - 1ULL)) {
 
 		if (gpt->no_relocate || fdisk_is_readonly(cxt))
 			fdisk_warnx(cxt, _("The backup GPT table is not on the end of the device."));
